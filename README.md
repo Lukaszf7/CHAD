@@ -1,211 +1,148 @@
-# CHAD — Voice Assistant
+# CHAD
 
-CHAD is a modular, configurable desktop voice assistant: say a wake word,
-ask a question, get a spoken answer. It also types, does push-to-talk,
-remembers you between launches, and can call out to real tools (the
-time, live weather, exact arithmetic, system stats) mid-conversation.
+**A fully async, provider-agnostic voice assistant framework** — wake word
+detection, streaming speech-to-text, LLM reasoning augmented with
+real-world tool calling, and streaming text-to-speech, all pipelined
+together with sub-second perceived latency and mid-sentence
+interruptibility.
 
-All nine planned milestones are complete — see the [Roadmap](#roadmap) at
-the bottom for what shipped when.
+Say a wake word. Ask it anything. It streams a spoken answer back before
+it's even finished thinking — and if you talk over it, it stops and
+listens instead of talking through you.
 
-## Features
+## Why this isn't just another wake-word demo
 
-- **Three ways to talk to it**: hands-free wake word (`python main.py`),
-  push-to-talk (`--push-to-talk`), or plain typed chat (`--text`) — the
-  same personality, memory, and plugins work in all three.
-- **Streamed replies**: the model's reply is spoken sentence-by-sentence
-  as it's generated, not after the whole response finishes.
-- **Barge-in**: say the wake word again while it's still talking and it
-  stops and listens immediately.
-- **Persistent memory**: a rolling summary of what you've told it,
-  carried across separate launches (not a raw transcript dump).
-- **Plugins**: the model can call real tools mid-reply — current time,
-  live weather, exact arithmetic, system CPU/RAM — and adding a new one
-  is a single drop-in `.py` file, no other code changes.
-- **Recovers from failures**: retries transient network errors, and
-  reconnects automatically if the microphone gets unplugged mid-session.
-- **Swappable personality**: the whole persona lives in a JSON file, not
-  in code.
+Most hobbyist voice assistant projects are a `while True` loop that
+records, transcribes, prompts, and plays back audio sequentially — dead
+air while each stage runs. CHAD is architected as a genuine concurrent
+pipeline instead:
 
-## Quick Start
+- **Streaming end-to-end.** LLM tokens are grouped into sentences on the
+  fly and handed to a synthesis pipeline sentence-by-sentence, so speech
+  starts on the *first* sentence while the model is still generating the
+  rest of the reply — not after the full response completes.
+- **Barge-in via structured concurrency.** While the assistant is
+  speaking, a wake-word listener races against the active reply using
+  `asyncio.wait(..., FIRST_COMPLETED)`. Interrupt it mid-sentence and
+  playback stops and a new turn begins immediately — no polling, no
+  manual thread coordination.
+- **Tool-augmented reasoning.** The LLM doesn't just chat — it can call
+  real functions (exact arithmetic, live weather, system telemetry,
+  the current time) mid-conversation via OpenAI-style function calling,
+  deciding for itself when a question needs a tool rather than matching
+  hardcoded trigger phrases. New capabilities are single drop-in Python
+  files, auto-discovered at startup — zero registry edits, zero changes
+  to the orchestration layer.
+- **Provider-agnostic by construction.** LLM, text-to-speech, and
+  transcription are each behind an abstract interface with a name-keyed
+  factory registry (a Strategy pattern applied consistently across the
+  whole I/O boundary). Swapping OpenAI for a different backend is a
+  subclass and a dictionary entry — nothing downstream changes.
+- **Resilient by default, not by accident.** Every network call is
+  wrapped in exponential-backoff-with-jitter retry logic. A microphone
+  that gets unplugged mid-session doesn't crash the process — it's
+  detected, surfaced as a typed error, and the assistant automatically
+  reconnects with backoff once the device comes back.
+- **Bounded, durable memory.** Rather than replaying raw transcripts
+  forever, conversations are folded into a single rolling LLM-generated
+  summary (~150 words) after each session and re-injected into the
+  system prompt on the next launch — memory that survives restarts
+  without growing unbounded cost or context-window pressure.
+- **Security-conscious where it's easy to be lazy.** The `calculate` tool
+  evaluates user-influenced arithmetic expressions via a hand-rolled,
+  whitelisted AST walker — not `eval()` — so it's structurally incapable
+  of executing injected code, not just "probably fine in practice."
 
-1. **Open a terminal in the project folder.**
-   In VS Code: `Terminal -> New Terminal`. Make sure it lands in
-   `Documents/GitHub/CHAD`.
+## Origin story
 
-2. **Create a virtual environment** (keeps this project's packages
-   separate from everything else on your machine):
+This started life as a two-file weekend hack — `Chad_speaking.py`, no
+error handling, no config, three different OpenAI API keys hardcoded
+directly in source, and a truncated script that didn't actually run.
+It's since been rebuilt from the ground up into the modular system
+described above: ten incremental milestones, each shipped in a fully
+working, independently tested state — provider abstractions, an async
+audio pipeline, wake-word debouncing, failure recovery, a plugin
+architecture, and a 100+ test suite exercising the pure logic and
+mocked I/O boundaries with zero flakiness.
 
-   ```powershell
-   python -m venv venv
-   ```
+## Architecture
 
-3. **Activate it:**
-
-   ```powershell
-   venv\Scripts\Activate.ps1
-   ```
-
-   You'll know it worked because your prompt now starts with `(venv)`.
-
-   > If you get an error about "running scripts is disabled on this
-   > system," run this once, then retry step 3:
-   > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
-
-4. **Install dependencies:**
-
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-   openWakeWord needs one extra one-time step to download its shared
-   preprocessing models (not bundled in the pip package):
-
-   ```powershell
-   python -c "from openwakeword.utils import download_models; download_models()"
-   ```
-
-5. **Set up your secrets file:**
-
-   ```powershell
-   Copy-Item .env.example .env
-   ```
-
-   Then open `.env` in a text editor and paste your OpenAI API key after
-   `OPENAI_API_KEY=`. Get a key at
-   https://platform.openai.com/api-keys if you don't have one. See
-   [Security](#security) below before reusing an old key.
-
-6. **Make sure you have a wake word model.**
-   A trained model should already be at `models/jerry_wakeword.onnx`. If
-   you're starting fresh or want your own wake word, train one with
-   [openWakeWord's training pipeline](https://github.com/dscripka/openWakeWord)
-   and point `wake_word.model_path` in `data/config.json` at the result.
-   (Only needed for the default hands-free mode — `--text` and
-   `--push-to-talk` don't touch the wake word at all.)
-
-7. **Run it:**
-
-   ```powershell
-   python main.py                # hands-free: say "Jerry", then ask something
-   python main.py --push-to-talk # press Enter, speak, get a spoken reply
-   python main.py --text         # type instead of speaking, no mic needed
-   ```
-
-### Expected result
-
-A colored startup banner showing your configuration, then:
-
-- **Default mode**: "`Jerry is listening for the wake word 'Jerry'.`" — say
-  it, wait for the chime, then ask something.
-- **`--push-to-talk`**: "`[Enter to talk]`" — press Enter, speak, release
-  is automatic (it stops recording after you go quiet).
-- **`--text`**: "`You: `" — type a message and press Enter.
-
-A `logs/chad.log` file also appears — every run appends there, so you
-have a history even after closing the terminal.
-
-## Configuration
-
-Two places, two purposes:
-
-- **`data/config.json`** — anything safe to share: voice, wake word
-  sensitivity, model names, timeouts, personality. Edit this freely.
-- **`.env`** — secrets and machine-specific overrides only. Never
-  committed (see `.gitignore`). Copy `.env.example` to create your own.
-  Anything set here overrides the matching `data/config.json` value.
-
-### `data/config.json` reference
-
-Every field has a default (shown below) — you only need to set what
-you're changing. See `config.py` for the authoritative source.
-
-| Section | Field | Default | What it does |
-|---|---|---|---|
-| `assistant_name` | — | `"Assistant"` | The name spoken in status messages and used for the wake word banner. |
-| `personality` | — | `"jerry"` | Which `data/personalities/<name>.json` file to load. |
-| `wake_word` | `model_path` | *(required)* | Path to your trained `.onnx` wake word model. |
-| | `sensitivity` | `0.35` | A per-frame score above this counts as a "hit." Lower = triggers more easily. |
-| | `confirm_window` | `5` | How many recent frames are considered together when deciding to trigger. |
-| | `hits_required` | `2` | How many of those `confirm_window` frames must be above `sensitivity` to trigger. |
-| | `vad_threshold` | `0.0` (shipped in `data/config.json`; the Python dataclass fallback is `0.45` if this key is ever removed) | openWakeWord's internal voice-activity gate. **Leave at `0.0`** — see [Wake word tuning](#wake-word-tuning). |
-| | `refractory_seconds` | `1.5` | Minimum time between two triggers, so one utterance can't fire twice. |
-| | `debug_logging` | `false` | Log every per-frame score above `debug_threshold` — turn on when tuning. |
-| | `debug_threshold` | `0.20` | Score floor for what gets logged when `debug_logging` is on. |
-| `audio` | `sample_rate` | `16000` | Microphone sample rate in Hz. openWakeWord expects 16kHz. |
-| | `frame_duration_ms` | `80` | Size of each audio chunk fed to VAD/wake word. |
-| | `input_device` | `null` (system default) | Set to a device index or name if you have multiple microphones. |
-| | `speech_start_threshold` / `speech_end_threshold` | `0.018` / `0.012` | Volume levels (hysteresis) that start/end a recorded utterance. |
-| | `silence_duration_seconds` | `0.35` | How long you have to go quiet before recording stops. |
-| | `listen_start_timeout_seconds` | `6.0` | How long to wait for you to start speaking before giving up. |
-| | `max_utterance_seconds` | `12.0` | Hard cap on how long a single recording can run. |
-| | `wake_buffer_flush_seconds` | `0.4` | How long to discard audio right after the assistant stops talking, so it doesn't hear its own voice echo as a false trigger. |
-| `ai` | `provider` | `"openai"` | LLM backend (see `ai/providers.py`). |
-| | `chat_model` | `"gpt-4o-mini"` | Model used for conversation. |
-| | `transcribe_model` | `"gpt-4o-mini-transcribe"` | Model used for speech-to-text. |
-| | `transcribe_language` | `"en"` | Language hint passed to the transcription model. |
-| | `temperature` | `0.8` | Chat model creativity/randomness. |
-| | `max_tokens` | `120` | Reply length cap — keep this small, replies are spoken aloud. |
-| | `max_history_messages` | `12` | How many recent turns stay in context before older ones are trimmed. |
-| `tts` | `provider` | `"edge"` | Text-to-speech backend (see `tts/`). |
-| | `edge_voice` | `"en-US-BrianNeural"` | Any [Edge TTS voice name](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts). |
-| `conversation` | `timeout_seconds` | `10.0` | How long to wait for a follow-up question before going back to sleep. |
-| | `sleep_message` | `"Goodbye!"` | Spoken when a sleep phrase is heard. |
-| | `sleep_phrases` | `[]` | Phrases (substring match) that end the conversation, e.g. `"goodbye"`. |
-| `memory` | `enabled` | `true` | Whether to persist/reload the rolling memory summary across launches. |
-| `ui` | `color` | `true` | Colored terminal output. |
-| | `sound_effects` | `true` | Short chime cues on wake/listen/think/speak/done. |
-| `plugins` | `enabled` | `true` | Whether to load and expose plugins to the LLM as tools at all. |
-| `logging` | `level` | `"INFO"` | Log verbosity (`DEBUG`/`INFO`/`WARNING`/`ERROR`). |
-
-### `.env` reference
-
-| Variable | Required? | Purpose |
-|---|---|---|
-| `OPENAI_API_KEY` | Yes | Chat completions and speech-to-text. |
-| `ELEVENLABS_API_KEY` | Only if you add an ElevenLabs TTS provider | Not used by the built-in `edge` provider. |
-| `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Only if you add those providers | Interfaces exist for other providers; only OpenAI is implemented today. |
-| `LOG_LEVEL` | No | Overrides `logging.level` from `data/config.json`. |
-| `CONFIG_PATH` | No | Point at a different config.json entirely. |
-| `WAKE_WORD_MODEL_PATH` | No | Override the wake word model path per-machine without editing config.json. |
-
-## Personalities
-
-A personality is just `data/personalities/<name>.json`:
-
-```json
-{
-  "name": "Jerry",
-  "system_prompt": "You are Jerry, a voice assistant who is a homie to whomever he is assisting..."
-}
+```
+                    ┌─────────────────────────────────────────┐
+                    │              wake word (VAD +            │
+                    │        openWakeWord, debounced)           │
+                    └───────────────────┬───────────────────────┘
+                                        ▼
+   ┌──────────────┐   ┌──────────────────────┐   ┌──────────────────┐
+   │  microphone   │──▶│  speech-to-text       │──▶│  LLM (streamed)   │
+   │  (async, VAD  │   │  (OpenAI transcribe)  │   │  + tool calling   │
+   │   hysteresis) │   └──────────────────────┘   └─────────┬────────┘
+   └──────────────┘                                          │
+          ▲                                                  ▼
+          │            ┌──────────────────┐      ┌────────────────────┐
+          └────────────│  barge-in race     │◀────│  sentence-grouped   │
+       (interrupts a   │  (asyncio.wait)    │      │  streaming TTS      │
+        reply mid-turn)└──────────────────┘      │  (producer/consumer  │
+                                                    │   queue, gapless)   │
+                                                    └────────────────────┘
 ```
 
-Add a new file, then set `"personality": "<name>"` in `data/config.json`.
-Keep the system prompt short and explicit about speaking style (e.g. "1-3
-sentences, no lists, no markdown") — replies are read aloud, so anything
-a text chatbot would normally get away with (bullet points, long
-paragraphs) sounds wrong spoken.
+Every arrow above is a swappable, independently testable component —
+see [Extending CHAD](#extending-chad).
 
-## Plugins
+## Highlights
 
-The assistant can call real tools mid-conversation instead of guessing —
-ask "what's the weather in Chicago" or "what's 847 times 213" and it
-actually looks it up / computes it exactly, via OpenAI-style function
-calling: the model decides on its own when a question needs a tool, no
-hardcoded trigger phrases required.
+- **Three interaction modes** sharing one conversation engine: hands-free
+  wake word, push-to-talk, and typed chat.
+- **Tool-augmented LLM** — live weather, exact arithmetic, system
+  telemetry, real-time clock — extensible via a one-file plugin API.
+- **Persistent, bounded memory** across sessions via LLM summarization.
+- **Data-driven personas** — the entire personality lives in a JSON
+  system prompt, not code, so swapping who you're talking to is a new
+  file, not a redeploy.
+- **Automatic failure recovery** — retry-with-backoff on every network
+  call, live microphone-reconnect on hardware disconnect.
+- **A neon terminal HUD** — gradient-rendered banner, live CPU/RAM
+  meters, synthesized (not shipped-as-assets) UI sound cues.
+- **103 automated tests** covering config parsing, the debounce/VAD
+  state machines, the tool-calling loop, and the plugin system — all
+  through fakes/mocks, running in ~10 seconds with no API key or mic.
 
-Built-in plugins (`plugins/`):
+## Tech stack
 
-| Plugin | Tool name | What it does |
+Python 3.11 · `asyncio` · OpenAI (chat completions + speech-to-text) ·
+Edge TTS · openWakeWord (ONNX runtime) · `sounddevice` · `pygame` ·
+`rich` · `httpx` · `pytest` + `pytest-asyncio`
+
+## Getting started
+
+```powershell
+git clone <this repo> && cd CHAD
+python -m venv venv && venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -c "from openwakeword.utils import download_models; download_models()"
+Copy-Item .env.example .env   # then add your OPENAI_API_KEY
+python main.py                 # or --push-to-talk / --text
+```
+
+A trained wake-word `.onnx` model is required for the default hands-free
+mode (`--text` and `--push-to-talk` don't need one) — train your own via
+[openWakeWord's pipeline](https://github.com/dscripka/openWakeWord) and
+point `wake_word.model_path` in `data/config.json` at it.
+
+## Extending CHAD
+
+Every external integration sits behind an abstract interface plus a
+name-keyed registry — no caller ever imports a vendor SDK directly:
+
+| To add a new... | Subclass | Register in |
 |---|---|---|
-| `time_plugin.py` | `get_current_time` | Real local date/time. |
-| `system_plugin.py` | `get_system_status` | Live CPU/RAM usage of the host machine. |
-| `calculator_plugin.py` | `calculate` | Exact arithmetic via a safe AST evaluator (never `eval()`). |
-| `weather_plugin.py` | `get_weather` | Live conditions via [Open-Meteo](https://open-meteo.com) — free, no API key needed. |
+| LLM provider (Anthropic, Gemini, Ollama...) | `LLMProvider` (`ai/providers.py`) | `_PROVIDERS` dict, same file |
+| TTS provider (ElevenLabs...) | `TTSProvider` (`tts/base.py`) | `_PROVIDERS` dict in `tts/__init__.py` |
+| Transcription provider | `Transcriber` (`audio/transcriber.py`) | `_TRANSCRIBERS` dict, same file |
+| Tool the LLM can call | — | drop a file in `plugins/` (see below) |
 
-### Writing your own
-
-Drop a new `.py` file in `plugins/`:
+### Plugins in 15 lines
 
 ```python
 from plugins.base import plugin
@@ -213,7 +150,7 @@ from plugins.base import plugin
 @plugin(
     name="my_tool",
     description="One clear sentence the model uses to decide when to call this.",
-    parameters={  # omit entirely for a zero-argument tool
+    parameters={
         "type": "object",
         "properties": {"some_arg": {"type": "string", "description": "..."}},
         "required": ["some_arg"],
@@ -223,159 +160,92 @@ async def my_tool(some_arg: str) -> str:
     return f"did something with {some_arg}"
 ```
 
-That's it — `plugins/__init__.py` auto-discovers every module in the
-folder at startup, no registry to edit. A few things worth knowing:
+`plugins/__init__.py` auto-discovers every module in the folder at
+startup via `pkgutil` + `importlib` — no registry to edit, no restart
+logic to write. Built-in examples: exact arithmetic (`calculator_plugin.py`,
+safe-AST, not `eval()`), live weather (`weather_plugin.py`, via the free
+Open-Meteo API), system telemetry (`system_plugin.py`), and the current
+time (`time_plugin.py`).
 
-- `description` is the *only* thing the model sees when deciding whether
-  to call your tool — be specific ("use this whenever the user asks
-  about X"), not just a restatement of the function name.
-- A tool call costs a second model round-trip (decide to call it, get the
-  result, generate the final answer), so tool-using replies are
-  noticeably slower than plain chat — expect several seconds, not
-  sub-second.
-- If your handler raises, or the model hallucinates a tool name that
-  doesn't exist, the assistant doesn't crash — it feeds an error string
-  back to the model so it can recover gracefully in its spoken reply.
-- Set `plugins.enabled: false` in `data/config.json` to disable the whole
-  system (e.g. for a lower-latency, chat-only setup).
+## Configuration reference
 
-## Wake word tuning
+Two places, two purposes: `data/config.json` for anything safe to share
+(voice, sensitivity, model names, personality), `.env` for secrets and
+per-machine overrides (never committed — see `.gitignore`).
 
-The wake word pipeline has two independent layers, and confusing them is
-the most common source of "it barely triggers" or "it's over-eager":
+<details>
+<summary><strong>Full <code>data/config.json</code> field reference</strong></summary>
 
-1. **openWakeWord's own model score**, gated by `wake_word.vad_threshold`
-   — an internal Silero VAD check. **This should stay at `0.0`
-   (disabled).** It gates on a *lagged* audio window (roughly 240-560ms
-   *before* the current frame), which for a short single-word wake
-   phrase often doesn't overlap the actual utterance at all — the score
-   gets silently zeroed before your own debounce logic ever sees it.
-   Symptom if this is misconfigured: you have to shout and repeat the
-   wake word many times before it ever registers.
-2. **This project's own debounce logic** (`audio/wakeword.py`): a score
-   only counts as a "hit" above `wake_word.sensitivity`, and a trigger
-   only fires once `hits_required` of the last `confirm_window` frames
-   are hits. This is what actually prevents false positives — tune
-   *this* layer, not the VAD gate.
+| Section | Field | Default | What it does |
+|---|---|---|---|
+| `assistant_name` | — | `"Assistant"` | The name spoken in status messages and used for the wake word banner. |
+| `personality` | — | `"jerry"` | Which `data/personalities/<name>.json` file to load. |
+| `wake_word` | `model_path` | *(required)* | Path to your trained `.onnx` wake word model. |
+| | `sensitivity` | `0.35` | A per-frame score above this counts as a "hit." Lower = triggers more easily. |
+| | `confirm_window` | `5` | How many recent frames are considered together when deciding to trigger. |
+| | `hits_required` | `2` | How many of those `confirm_window` frames must be above `sensitivity` to trigger. |
+| | `vad_threshold` | `0.0` (dataclass fallback is `0.45` if this key is ever removed) | openWakeWord's internal voice-activity gate. Left disabled deliberately — its lag window can silently zero short wake-phrase scores. |
+| | `refractory_seconds` | `1.5` | Minimum time between two triggers, so one utterance can't fire twice. |
+| | `debug_logging` / `debug_threshold` | `false` / `0.20` | Logs per-frame scores while tuning. |
+| `audio` | `sample_rate` / `frame_duration_ms` | `16000` / `80` | Microphone sampling — 16kHz/80ms matches openWakeWord's expected input shape. |
+| | `input_device` | `null` (system default) | Device index/name if you have multiple microphones. |
+| | `speech_start_threshold` / `speech_end_threshold` | `0.018` / `0.012` | Hysteresis volume thresholds that start/end a recorded utterance. |
+| | `silence_duration_seconds` | `0.35` | Silence duration before a recording is considered finished. |
+| | `listen_start_timeout_seconds` / `max_utterance_seconds` | `6.0` / `12.0` | Timeout waiting for speech to start / hard cap on utterance length. |
+| | `wake_buffer_flush_seconds` | `0.4` | Echo-avoidance: audio discarded right after the assistant stops talking. |
+| `ai` | `provider` / `chat_model` / `transcribe_model` / `transcribe_language` | `openai` / `gpt-4o-mini` / `gpt-4o-mini-transcribe` / `en` | Model selection. |
+| | `temperature` / `max_tokens` / `max_history_messages` | `0.8` / `120` / `12` | Generation and context-window tuning. |
+| `tts` | `provider` / `edge_voice` | `edge` / `en-US-BrianNeural` | Any [Edge TTS voice](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts). |
+| `conversation` | `timeout_seconds` / `sleep_message` / `sleep_phrases` | `10.0` / `"Goodbye!"` / `[]` | Follow-up window and how a conversation ends. |
+| `memory` | `enabled` | `true` | Persist/reload the rolling memory summary. |
+| `ui` | `color` / `sound_effects` | `true` / `true` | Terminal styling and synthesized cue tones. |
+| `plugins` | `enabled` | `true` | Whether tool-calling is exposed to the LLM at all. |
+| `logging` | `level` | `"INFO"` | Log verbosity. |
 
-To tune it:
+</details>
 
-1. Set `wake_word.debug_logging: true` and `wake_word.debug_threshold`
-   low (e.g. `0.02`) in `data/config.json`, then run `python main.py`
-   normally and watch `logs/chad.log` while you say the wake word.
-2. **Under-triggering** (scores rarely cross `sensitivity`): lower
-   `sensitivity`, or lower `hits_required`.
-3. **Over-triggering** (fires on background noise/other words): raise
-   `sensitivity`, or raise `hits_required`.
-4. If scores barely register at all even close to the microphone, the
-   `.onnx` model itself is likely the bottleneck (training data
-   quality/quantity), not these settings — consider retraining via
-   [openWakeWord's training pipeline](https://github.com/dscripka/openWakeWord),
-   or temporarily pointing `wake_word.model_path` at one of
-   openWakeWord's bundled pretrained models (`hey_jarvis`, `alexa`,
-   `hey_mycroft`) to A/B test whether it's the model or the pipeline.
+<details>
+<summary><strong><code>.env</code> reference</strong></summary>
 
-## Memory
-
-Not a raw transcript log — a single rolling summary (~150 words), stored
-at `data/memory/memory.json`. At the end of each conversation (sleep
-phrase, timeout, or exit), the LLM folds that session into the existing
-summary, and the result is re-injected into the system prompt on the
-next launch. This keeps "remembering past conversations" bounded in size
-and cost no matter how many sessions have happened. Set `memory.enabled:
-false` in `data/config.json` to turn it off entirely.
-
-## Extending CHAD
-
-Every external integration is behind an abstract interface + a
-name-keyed registry, so adding a new backend never requires touching
-callers:
-
-| To add a new... | Subclass | Register in |
+| Variable | Required? | Purpose |
 |---|---|---|
-| LLM provider (Anthropic, Gemini, Ollama...) | `LLMProvider` (`ai/providers.py`) | `_PROVIDERS` dict, same file |
-| TTS provider (ElevenLabs...) | `TTSProvider` (`tts/base.py`) | `_PROVIDERS` dict in `tts/__init__.py` |
-| Transcription provider | `Transcriber` (`audio/transcriber.py`) | `_TRANSCRIBERS` dict, same file |
-| Tool/capability | — | Just drop a file in `plugins/`, see [Plugins](#plugins) |
+| `OPENAI_API_KEY` | Yes | Chat completions and speech-to-text. |
+| `ELEVENLABS_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Only if you add those providers | Interfaces exist; only OpenAI + Edge TTS are wired up today. |
+| `LOG_LEVEL` / `CONFIG_PATH` / `WAKE_WORD_MODEL_PATH` | No | Per-machine overrides of the matching `data/config.json` values. |
 
-Only OpenAI (chat + transcription) and Edge TTS are implemented today;
-the other three secrets in `.env.example` are there for when someone
-adds those providers.
+</details>
+
+## Testing
+
+```powershell
+pytest
+```
+
+103 tests, ~10 seconds, no API key or microphone required — the real
+model/network/hardware boundaries (`audio/recorder.py`, `audio/player.py`,
+`tts/edge.py`, `audio/transcriber.py`, the real openWakeWord ONNX model)
+are exercised by hand against real hardware instead of mocked, since
+faking them would test the mock, not the integration.
 
 ## Project layout
 
 ```
 CHAD/
-├── main.py              # Entry point: argparse (--text / --push-to-talk / default)
-├── assistant.py           # Orchestrator - the conversation loop for all three modes
-├── ui.py                    # Terminal presentation: neon HUD banner, status lines, sound cues
-├── config.py                  # Loads + validates data/config.json and .env
-├── constants.py                 # Fixed values (paths, log format) — not user config
-│
-├── audio/                # Microphone, VAD, wake word, playback, transcription
-├── ai/                     # LLM provider abstraction, conversation history, memory, prompts
-├── tts/                      # Text-to-speech provider abstraction
-├── plugins/                    # Drop-in tool-calling plugin system
-├── utils/                        # Logging, retry, sentence-streaming, timing helpers
-│
-├── data/
-│   ├── config.json              # All user-tunable settings
-│   ├── personalities/              # Persona system prompts (JSON)
-│   └── memory/                       # Persisted conversation summary (gitignored)
-├── models/                # Wake word .onnx models (gitignored, per-user)
-├── tests/                   # pytest suite (config, plugins, tool-calling loop, wake word...)
-└── legacy/                    # Old proof-of-concept scripts, kept for reference only
+├── main.py            # Entry point (--text / --push-to-talk / default)
+├── assistant.py          # Async orchestration - the conversation loop
+├── ui.py                    # Neon terminal HUD: banner, status, sound cues
+├── config.py                  # data/config.json + .env loading & validation
+├── audio/                # Mic capture, VAD, wake word, playback, STT
+├── ai/                     # LLM abstraction, conversation history, memory, prompts
+├── tts/                      # Text-to-speech abstraction
+├── plugins/                    # Drop-in LLM tool-calling plugin system
+├── utils/                        # Retry, sentence-streaming, logging, timing
+├── data/                # config.json, personas, persisted memory
+├── models/                # Wake-word .onnx models (per-user, gitignored)
+└── tests/                   # pytest suite
 ```
 
-## Running the tests
+---
 
-```powershell
-pip install -r requirements.txt   # pulls in pytest + pytest-asyncio
-pytest
-```
-
-The suite covers config parsing, conversation/memory bookkeeping, retry
-logic, VAD and wake-word debounce math, and the plugin/tool-calling
-system — all with fake models/HTTP clients, so it runs in seconds with no
-API key or microphone needed. It does not exercise the real
-microphone/speaker/network calls (`audio/recorder.py`, `audio/player.py`,
-`tts/edge.py`, `audio/transcriber.py`) — those are verified by hand
-against the real hardware/network instead.
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| `Configuration is incomplete... Missing OPENAI_API_KEY` | You skipped the `.env` setup step, or left the value blank. |
-| `Wake word model not found at ...` | Check `data/config.json` -> `wake_word.model_path` points to a real `.onnx` file in `models/`. |
-| `ModuleNotFoundError: No module named 'dotenv'` (or similar) | You ran `python main.py` without activating the venv, or skipped `pip install -r requirements.txt`. |
-| PowerShell won't run `Activate.ps1` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then retry. |
-| Wake word barely triggers, or you have to shout | See [Wake word tuning](#wake-word-tuning) — check `vad_threshold` is `0.0` first. |
-| `Could not open the microphone` | No mic connected, or the wrong `audio.input_device` is set. List devices with `python -c "import sounddevice; print(sounddevice.query_devices())"`. |
-| Garbled/mojibake characters in the terminal banner | Should self-correct — `main.py` forces UTF-8 console output on Windows automatically. If it still looks wrong, your terminal font may not have the Unicode glyphs used in the banner. |
-| A plugin makes replies noticeably slower | Expected — a tool call is a second model round-trip. See [Plugins](#plugins). |
-
-## Security
-
-Three OpenAI API keys were found hardcoded in plaintext in the original
-proof-of-concept scripts before this rebuild (`legacy/*.bak`, kept only
-for reference and gitignored from any real use). One of those keys is
-still what's carrying `.env` today so the project kept working during
-the rebuild. **If you haven't already, rotate it**: generate a fresh key
-at https://platform.openai.com/api-keys, put the new one in `.env`, and
-revoke the old one from the same page. `.env` is gitignored, so this
-won't happen again going forward — just the original leak needs cleaning
-up.
-
-## Roadmap
-
-- [x] Milestone 0 — Config, logging, project skeleton
-- [x] Milestone 1 — AI provider abstraction + terminal text chat
-- [x] Milestone 2 — TTS abstraction + streaming playback
-- [x] Milestone 3 — Microphone capture, VAD, transcription
-- [x] Milestone 4 — Wake word + full async voice pipeline (feature parity with the old script)
-- [x] Milestone 5 — Error recovery, retries, persistent memory
-- [x] Milestone 6 — Terminal UX polish (status display, sound effects)
-- [x] Milestone 7 — Plugin system
-- [x] Milestone 8 — Tests
-- [x] Milestone 9 — Full documentation
+*Built solo, end to end — architecture, async pipeline design, provider
+abstractions, plugin system, and test suite.*
