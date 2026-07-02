@@ -1,0 +1,79 @@
+# ============================================================
+# Milestone 0 dependencies
+# ============================================================
+# python-dotenv: loads secrets/overrides from .env into the environment
+# so config.py can read them with os.getenv(). Needed because we never
+# hardcode API keys in source.
+python-dotenv==1.0.1
+
+# ============================================================
+# Milestone 1 dependencies
+# ============================================================
+# openai: chat completions (streaming) in ai/providers.py. Also used for
+# transcription starting in Milestone 3, so it's a one-time install.
+openai==2.6.1
+
+# ============================================================
+# Milestone 2 dependencies
+# ============================================================
+# edge-tts: text-to-speech synthesis in tts/edge.py.
+# pygame: audio playback (audio/player.py) — specifically its mixer.music
+# channel, which can decode mp3 and gaplessly queue clips.
+edge-tts==7.2.8
+pygame==2.6.1
+
+# ============================================================
+# Milestone 3 dependencies
+# ============================================================
+# sounddevice: non-blocking microphone capture (audio/recorder.py).
+# numpy: audio buffer math - volume/VAD calculations, PCM concatenation.
+sounddevice==0.5.5
+numpy==2.4.4
+
+# ============================================================
+# Milestone 4 dependencies
+# ============================================================
+# openwakeword: wake word detection in audio/wakeword.py. After
+# installing, run this ONE-TIME setup command to download its shared
+# preprocessing models (not bundled in the pip package):
+#   python -c "from openwakeword.utils import download_models; download_models()"
+openwakeword==0.6.0
+
+# ============================================================
+# Milestone 5 dependencies
+# ============================================================
+# (none new - retries/memory/reconnect logic use only the standard
+# library and packages already installed above)
+
+# ============================================================
+# Milestone 6 dependencies
+# ============================================================
+# rich: colored startup banner and status output (ui.py).
+# psutil: CPU/RAM stats shown in the banner and per-turn timing line.
+rich==15.0.0
+psutil==7.2.2
+
+# ============================================================
+# Milestone 7 dependencies
+# ============================================================
+# httpx: async HTTP calls for plugins that hit a live API
+# (plugins/weather_plugin.py -> Open-Meteo). Already installed
+# transitively via openai/edge-tts, but pinned explicitly here since
+# our own code now imports it directly.
+httpx==0.28.1
+
+# ============================================================
+# Milestone 8 dependencies
+# ============================================================
+# pytest: test runner. pytest-asyncio: lets async def test functions run
+# without manual asyncio.run() boilerplate (see pytest.ini's
+# asyncio_mode = auto).
+pytest==9.1.1
+pytest-asyncio==1.4.0
+
+# ============================================================
+# Added in later milestones (kept here so the file always reflects
+# everything the finished project needs — installed once, used as
+# each milestone wires it up):
+# ============================================================
+# (Milestone 9 - documentation - needs no new packages)

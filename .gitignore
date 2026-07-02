@@ -1,0 +1,61 @@
+# ============================================================
+# Secrets — never commit these
+# ============================================================
+.env
+*.env
+!.env.example
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ============================================================
+# Virtual environments
+# ============================================================
+venv/
+.venv/
+env/
+
+# ============================================================
+# Runtime data — generated while the assistant runs, not source
+# ============================================================
+logs/*.log
+data/memory/
+data/sounds/
+data/*.db
+data/*.sqlite3
+*.tmp.wav
+*.tmp.mp3
+temp_audio.wav
+response.mp3
+
+# ============================================================
+# Wake-word models — usually personal voice recordings trained
+# per-user. Keep the repo generic; each user supplies their own.
+# Delete the line below if you want to commit your own model.
+# ============================================================
+models/*.onnx
+!models/.gitkeep
+
+# ============================================================
+# Editor / OS cruft
+# ============================================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Old proof-of-concept files (kept locally for reference only)
+# ============================================================
+legacy/
